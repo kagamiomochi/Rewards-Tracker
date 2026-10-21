@@ -1,0 +1,138 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+# Queue runs per ref instead of cancelling, so a release is never left half-updated.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  APP_NAME: RewardsTracker
+  PRERELEASE_TAG: pre-release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Optional signing secrets. Without them the APK is signed with the debug key.
+      KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history and tags are needed to find the previous v* tag.
+          fetch-depth: 0
+
+      - name: Require an annotated tag
+        if: github.ref_type == 'tag'
+        run: |
+          # "tag" = annotated, "commit" = lightweight
+          type=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" --jq '.object.type')
+          if [ "$type" != "tag" ]; then
+            echo "::error::${GITHUB_REF_NAME} is a lightweight tag. Create it with: git tag -a ${GITHUB_REF_NAME} -m \"message\""
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compute version info
+        run: |
+          short="${GITHUB_SHA::7}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version_name="${GITHUB_REF_NAME#v}"
+            apk_name="${APP_NAME}-${GITHUB_REF_NAME}.apk"
+          else
+            version_name="0.0.0-pre.${GITHUB_RUN_NUMBER}+${short}"
+            apk_name="${APP_NAME}-pre-release-${short}.apk"
+          fi
+          echo "APP_VERSION_NAME=${version_name}" >> "$GITHUB_ENV"
+          echo "APK_NAME=${apk_name}" >> "$GITHUB_ENV"
+          echo "SHORT_SHA=${short}" >> "$GITHUB_ENV"
+
+      - name: Decode keystore
+        if: env.KEYSTORE_BASE64 != ''
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          apk=$(find app/build/outputs/apk/release -name '*.apk' | head -n 1)
+          test -n "$apk"
+          cp "$apk" "dist/${APK_NAME}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_NAME }}
+          path: dist/${{ env.APK_NAME }}
+
+      # v* annotated tag -> normal release marked as Latest
+      - name: Publish release (Latest)
+        if: github.ref_type == 'tag'
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          notes_args=(--generate-notes)
+          if [ -n "$prev" ]; then
+            notes_args+=(--notes-start-tag "$prev")
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # Re-run: replace the asset and keep the release as Latest.
+            gh release upload "$GITHUB_REF_NAME" "dist/${APK_NAME}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --prerelease=false --latest
+          else
+            gh release create "$GITHUB_REF_NAME" "dist/${APK_NAME}" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --latest \
+              "${notes_args[@]}"
+          fi
+
+      # Push to main -> rolling pre-release that always points at the newest commit
+      - name: Publish pre-release (latest commit)
+        if: github.ref_type == 'branch'
+        run: |
+          subject=$(git log -1 --pretty=%s)
+          notes="Automated build of the latest commit on \`${GITHUB_REF_NAME}\`.
+
+          - Commit: ${GITHUB_SHA}
+          - Message: ${subject}
+          - Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # Move the tag to the new commit, then recreate the release on top of it.
+          git tag -f "$PRERELEASE_TAG" "$GITHUB_SHA"
+          git push -f origin "refs/tags/${PRERELEASE_TAG}"
+
+          # Deleting the release keeps the tag (no --cleanup-tag).
+          gh release delete "$PRERELEASE_TAG" --yes 2>/dev/null || true
+          gh release create "$PRERELEASE_TAG" "dist/${APK_NAME}" \
+            --verify-tag \
+            --prerelease \
+            --latest=false \
+            --title "Pre-release (${SHORT_SHA})" \
+            --notes "$notes"
