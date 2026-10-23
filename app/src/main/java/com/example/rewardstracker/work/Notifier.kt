@@ -14,7 +14,12 @@ object Notifier {
     private const val CHANNEL_ID = "rewards_tracker"
 
     @SuppressLint("MissingPermission")
-    fun notify(context: Context, text: String) {
+    fun notify(
+        context: Context,
+        text: String,
+        id: Int = 1,
+        icon: Int = android.R.drawable.stat_notify_error
+    ) {
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
 
@@ -28,12 +33,12 @@ object Notifier {
             PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setSmallIcon(icon)
             .setContentTitle("Rewards Tracker")
             .setContentText(text)
             .setContentIntent(intent)
             .setAutoCancel(true)
             .build()
-        manager.notify(1, notification)
+        manager.notify(id, notification)
     }
 }

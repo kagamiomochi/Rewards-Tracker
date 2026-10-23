@@ -103,9 +103,11 @@ fun HomeScreen(onLogin: () -> Unit) {
             }
 
             // Newest first, with the difference from the previous record.
+            // Rows with no change (+0) are hidden; the diff is still computed against
+            // the immediately preceding record, so the remaining rows stay accurate.
             val rows = entries.mapIndexed { i, e ->
                 e to (if (i > 0) e.available - entries[i - 1].available else null)
-            }.asReversed()
+            }.filter { it.second != 0 }.asReversed()
             LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(rows, key = { it.first.fetchedAt }) { (e, diff) ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
