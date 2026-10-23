@@ -40,6 +40,7 @@ fun HomeScreen(onLogin: () -> Unit) {
     val scope = rememberCoroutineScope()
     val entries by PointStore.entries(context).collectAsStateWithLifecycle()
     val status by PointStore.status(context).collectAsStateWithLifecycle()
+    val fetchOk by PointStore.fetchOk(context).collectAsStateWithLifecycle()
     val fmt = remember { DateTimeFormatter.ofPattern("M/d HH:mm") }
 
     var times by remember { mutableStateOf(ScheduleStore.times(context)) }
@@ -50,7 +51,6 @@ fun HomeScreen(onLogin: () -> Unit) {
         val cutoff = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000
         entries.filter { it.fetchedAt >= cutoff }
     }
-    val buttonPadding = ButtonDefaults.ContentPadding
 
     Scaffold { padding ->
         Column(
@@ -75,19 +75,24 @@ fun HomeScreen(onLogin: () -> Unit) {
                             Fetcher.run(context)
                         }
                     },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = buttonPadding
+                    modifier = Modifier.weight(1f)
                 ) { Text("今すぐ取得", maxLines = 1) }
                 OutlinedButton(
-                    onClick = onLogin,
-                    modifier = Modifier.weight(1f),
-                    contentPadding = buttonPadding
-                ) { Text("ログイン", maxLines = 1) }
-                OutlinedButton(
                     onClick = { showSchedule = true },
-                    modifier = Modifier.weight(1f),
-                    contentPadding = buttonPadding
+                    modifier = Modifier.weight(1f)
                 ) { Text("取得時刻", maxLines = 1) }
+            }
+
+            // Shown only while the last fetch failed (or nothing has been fetched yet).
+            if (!fetchOk) {
+                Button(
+                    onClick = onLogin,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) { Text("ログインしてください", maxLines = 1) }
             }
 
             Text(

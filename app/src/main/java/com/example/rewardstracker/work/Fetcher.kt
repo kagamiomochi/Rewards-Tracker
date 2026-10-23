@@ -24,6 +24,7 @@ object Fetcher {
                 )
             )
         }
+        PointStore.setFetchOk(context, result is FetchResult.Ok)
         val label = when (result) {
             is FetchResult.Ok -> "OK ${result.available} pt"
             is FetchResult.NotLoggedIn -> "NOT LOGGED IN"

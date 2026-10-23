@@ -14,10 +14,12 @@ object PointStore {
     private const val PREFS = "rewards_points"
     private const val KEY = "entries"
     private const val KEY_STATUS = "status"
+    private const val KEY_FETCH_OK = "fetch_ok"
 
     private val lock = Any()
     private val state = MutableStateFlow<List<PointEntry>>(emptyList())
     private val statusState = MutableStateFlow("")
+    private val fetchOkState = MutableStateFlow(false)
     private var loaded = false
 
     fun entries(context: Context): StateFlow<List<PointEntry>> {
@@ -29,6 +31,20 @@ object PointStore {
     fun status(context: Context): StateFlow<String> {
         ensureLoaded(context)
         return statusState
+    }
+
+    // True while the most recent fetch succeeded. The login button is shown only when false.
+    fun fetchOk(context: Context): StateFlow<Boolean> {
+        ensureLoaded(context)
+        return fetchOkState
+    }
+
+    fun setFetchOk(context: Context, ok: Boolean) {
+        synchronized(lock) {
+            ensureLoaded(context)
+            prefs(context).edit().putBoolean(KEY_FETCH_OK, ok).apply()
+            fetchOkState.value = ok
+        }
     }
 
     fun setStatus(context: Context, text: String) {
@@ -58,6 +74,8 @@ object PointStore {
         val raw = p.getString(KEY, null)
         state.value = if (raw == null) emptyList() else decode(raw)
         statusState.value = p.getString(KEY_STATUS, "") ?: ""
+        // Before the first result is recorded, treat existing data as a past success.
+        fetchOkState.value = p.getBoolean(KEY_FETCH_OK, state.value.isNotEmpty())
         loaded = true
     }
 
