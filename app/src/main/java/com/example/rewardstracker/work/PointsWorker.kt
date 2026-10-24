@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.rewardstracker.data.FetchResult
+import com.example.rewardstracker.data.PointEntry
 import com.example.rewardstracker.data.PointStore
+import java.time.LocalDate
 
 class PointsWorker(context: Context, params: WorkerParameters) :
     CoroutineWorker(context, params) {
@@ -13,13 +15,16 @@ class PointsWorker(context: Context, params: WorkerParameters) :
         // Queue the next scheduled run first, so the chain continues even if this fetch fails.
         Scheduler.scheduleNext(applicationContext)
 
-        // Remember the previous value before the fetch stores the new record.
-        val previous = PointStore.entries(applicationContext).value.lastOrNull()?.available
+        // Take a snapshot before the fetch stores the new record.
+        val before = PointStore.entries(applicationContext).value
+        val previous = before.lastOrNull()?.available
+        val increasedToday = hasIncreasedOn(before, LocalDate.now().toEpochDay())
 
         return when (val result = Fetcher.run(applicationContext)) {
             is FetchResult.Ok -> {
-                // No change since the last record (+0): let the user know.
-                if (previous != null && result.available == previous) {
+                // No change since the last record (+0): let the user know,
+                // unless the points have already increased earlier today.
+                if (previous != null && result.available == previous && !increasedToday) {
                     Notifier.notify(
                         applicationContext,
                         "ポイントが増えていません (+0): ${result.available} pt",
@@ -39,5 +44,15 @@ class PointsWorker(context: Context, params: WorkerParameters) :
                     Result.failure()
                 }
         }
+    }
+
+    // True if any consecutive pair of records on the given day shows an increase.
+    // The last record before that day is used as the baseline for the first record of the day.
+    private fun hasIncreasedOn(entries: List<PointEntry>, epochDay: Long): Boolean {
+        val baseline = entries.lastOrNull { it.epochDay < epochDay }
+        val today = entries.filter { it.epochDay == epochDay }
+        return (listOfNotNull(baseline) + today)
+            .zipWithNext()
+            .any { (a, b) -> b.available > a.available }
     }
 }
